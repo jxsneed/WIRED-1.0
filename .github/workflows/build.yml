@@ -1,0 +1,93 @@
+name: Build wir3d VST3
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build on ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            artifact-name: wir3d-windows-vst3
+
+          - name: macOS
+            os: macos-latest
+            artifact-name: wir3d-macos-vst3
+
+          - name: Linux
+            os: ubuntu-22.04
+            artifact-name: wir3d-linux-vst3
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux audio dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libjack-jackd2-dev \
+            ladspa-sdk libfreetype6-dev libx11-dev libxcomposite-dev \
+            libxcursor-dev libxext-dev libxinerama-dev libxrandr-dev \
+            libxrender-dev libglu1-mesa-dev mesa-common-dev
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        run: cmake -S . -B build
+
+      - name: Configure (macOS)
+        if: runner.os == 'macOS'
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 2
+
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Get-ChildItem -Path build -Recurse -Filter "wir3d.vst3" | Select-Object -First 1 | ForEach-Object {
+            Copy-Item -Recurse $_.FullName dist/
+          }
+          Get-ChildItem -Path build -Recurse -Filter "wir3d.exe" | Select-Object -First 1 | ForEach-Object {
+            Copy-Item $_.FullName dist/
+          }
+          if (Test-Path README.md) { Copy-Item README.md dist/ }
+          if (Test-Path LICENSE) { Copy-Item LICENSE dist/ }
+
+      - name: Package macOS
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p dist
+          find build -name "wir3d.vst3" -type d -exec cp -R {} dist/ \; 2>/dev/null || true
+          find build -name "wir3d.app" -type d -exec cp -R {} dist/ \; 2>/dev/null || true
+          cp README.md LICENSE dist/ 2>/dev/null || true
+
+      - name: Package Linux
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist
+          find build -name "wir3d.vst3" -type d -exec cp -R {} dist/ \; 2>/dev/null || true
+          find build -name "wir3d" -type f -executable -exec cp {} dist/ \; 2>/dev/null || true
+          cp README.md LICENSE dist/ 2>/dev/null || true
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: dist/
+          retention-days: 30
